@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <script src="https://cdn.jsdelivr.net/gh/josephg/noisejs/perlin.js"></script>
+
+  <link rel="stylesheet" href="styles.css">
+
+  <title>흐르는 시뮬레이션</title>
+</head>
+<body>
+  
+  <!-- 사각형 브러시 -->
+  <div id="brush"></div>
+
+  <main>
+    <div id="control-panel">
+      <h2>지형 랜덤 생성</h2>
+      <div class="btn" onclick="createNewLand()">생성</div>
+      <br>
+      <h2>투하 유체량</h2>
+      <input id="amount" type="number" min="5" max="100" value="35">
+      <br>
+      <br>
+      <h2>브러시 크기</h2>
+      <input id="size" type="range" min="5" max="50" value="30">
+      <br>
+      <br>
+      <h2>시뮬레이션 된 유체 삭제</h2>
+      <div onclick="removeFluid()" class="btn" style="background-color: #CA5555; width: 88px;">유체 삭제</div>
+    </div>
+    <div id="display">
+      <div id="display-control">
+        <select id="multiplier">
+          <option value="1">x 1.0</option>
+          <option value="2">x 2.0</option>
+          <option value="3">x 3.0</option>
+          <option value="4">x 4.0</option>
+          <option value="5">x 5.0</option>
+        </select>
+        <div onclick="startAndStopSimulation()" class="btn" id="player">시작</div>
+      </div>
+      <canvas id="flow-canvas" width="800" height="800"></canvas>
+    </div>
+    
+  </main>
+
+</body>
+
+<script>
+
+  const canvas = document.getElementById('flow-canvas');
+  const ctx = canvas.getContext('2d');
+  const brush = document.getElementById('brush');
+  const player = document.getElementById('player');
+
+  // 지형 + 유체 <= 200 으로 제한.
+  const maxHeight = 200;
+
+  const height = 800;
+  const width = 800;
+  const scale = 0.01; // 값이 작을수록 Smooth가 올라감.
+
+  // 지형 배열 
+  let landArray = new Int32Array(width * height);
+  const imageData = ctx.createImageData(width, height);
+
+  // 유체 배열
+  let fluidArray = new Int32Array(width * height);
+
+  createNewLand();
+
+  // 지형을 새로 생성합니다.
+  function createNewLand() {
+
+    const randomSeed = Math.floor(Math.random() * 100000) + 1;
+    noise.seed(randomSeed);
+
+    for (let x = 0; x < width; x++) {
+      for (let y = 0; y < height; y++) {
+
+        // 펄린노이즈 값 계산하기
+        let value = noise.perlin2(x * scale, y * scale); // -1 ~ 1
+        value = (value + 1) / 2 * 100; // 0 ~ 100으로 정규화
+        landArray[x * width + y] = value; // landArray에 할당하기
+
+      }
+    }
+
+    removeFluid();
+    renderLandAndFluid();
+
+  }
+
+  // 유체를 떨어뜨립니다.
+  function dropFluid(xPos, yPos, brushSize, dropAmount) {
+
+    const minX = Math.trunc(Math.max(0, xPos - brushSize));
+    const maxX = Math.trunc(Math.min(width, xPos + brushSize));
+    const minY = Math.trunc(Math.max(0, yPos - brushSize));
+    const maxY = Math.trunc(Math.min(height, yPos + brushSize));
+
+    for (let x = minX; x < maxX; x++) {
+      for (let y = minY; y < maxY; y++) {
+
+        // 최대 높이에서 지형을 차감한 만큼만, 추가 가능함.
+        const limit = maxHeight - landArray[x * width + y];
+
+        // 최대를 limit으로 제한하여, amount가 최대 높이를 넘지 못하도록 제한.
+        fluidArray[x * width + y] = Math.min(fluidArray[x * width + y] + dropAmount, limit);
+      }
+    }
+
+  }
+
+  // 유체 흐름 시뮬레이션 (1번 실행시 1프레임이 움직임.) => 물은 1씩만 넘겨주삼.
+  const DIRS = [[0, 1], [0, -1], [1, 0], [-1, 0], [-1, -1], [-1, 1], [1, -1], [1, 1]];
+  function simulateFlow() {
+
+    for (let x = 0; x < width; x++) {
+      for (let y = 0; y < height; y++) {
+
+        // 현재 지형 높이
+        const landHeight = landArray[x * width + y];
+
+        // 현재 유체 높이
+        const fluidHeight = fluidArray[x * width + y];
+
+        // 수위
+        const waterLevel = landHeight + fluidHeight;
+
+        // 물이 없으면, 패스
+        if (fluidHeight <= 0) {
+          continue;
+        }
+
+        // 8방향 순회
+        for (const d of DIRS) {
+
+          // 신규 좌표 생성
+          const nx = x + d[0];
+          const ny = y + d[1];
+
+          // 경계 라인을 넘으면 다음걸로 넘김.
+          if (nx < 0 || ny < 0 || nx >= width || ny >= height) {
+            continue;
+          }
+
+          const nextLandHeight = landArray[nx * width + ny];
+          const nextFluidHeight = fluidArray[nx * width + ny];
+          const nextWaterLevel = nextLandHeight + nextFluidHeight;
+
+          // 현재 수위가 낮거나 같아서 넘겨줄 수 있는 물이 없으면, 다음으로 넘김.
+          if (waterLevel <= nextWaterLevel) {
+            continue;
+          }
+
+          // 물을 넘겨드림.
+          fluidArray[x * width + y] -= 1;
+          fluidArray[nx * width + ny] += 1;
+          
+          // 물이 부족해지면, 탈출함.
+          if (fluidArray[x * width + y] === 0) {
+            break;
+          }
+
+        }
+      }
+    }
+  }
+
+  // 지형 + 유체 렌더링
+  function renderLandAndFluid() {
+
+    const data = imageData.data;
+
+    for (let x = 0; x < width; x++) {
+      for (let y = 0; y < height; y++) {
+        
+        // 배열 참조 인덱스
+        const arrIndex = x * width + y;
+        // 이미지 데이터 참조 인덱스
+        const imgIndex = (x * width + y) * 4;
+
+        // 지형 색상 산출
+        const landValue = landArray[arrIndex];
+        const gray = Math.floor((landValue / 100) * 255);
+
+        const br = gray / 255;
+        const bg = gray / 255;
+        const bb = gray / 255;
+        const ba = 255 / 255;
+
+        // 유체 색상 산출
+        const fluidValue = fluidArray[arrIndex];
+        const blue = Math.floor((fluidValue / 100) * 255);
+
+        const fr = 0;
+        const fg = 0;
+        const fb = 230 / 255;
+        const fa = blue / 255;
+
+        // 알파 블렌딩 실시
+        const outA = fa + ba * (1 - fa);
+        const outR = (fr * fa + br * ba * (1 - fa)) / outA;
+        const outG = (fg * fa + bg * ba * (1 - fa)) / outA;
+        const outB = (fb * fa + bb * ba * (1 - fa)) / outA;
+
+        // 0 ~ 1 사이로 계산된 블렌딩 값을, RGBA 범위(0 ~ 255)에 맞게 표현
+        data[imgIndex] = outR * 255;
+        data[imgIndex + 1] = outG * 255;
+        data[imgIndex + 2] = outB * 255;
+        data[imgIndex + 3] = outA * 255;
+
+      }
+    }
+
+    // 조합된 이미지 데이터를 렌더링
+    ctx.putImageData(imageData, 0, 0);
+
+  }
+
+
+
+  /*
+  ##############################################################################
+  ##########################         상호작용        ############################
+  ##############################################################################
+  */
+ 
+  // 유체 제거 하기.
+  function removeFluid() {
+    fluidArray = new Int32Array(width * height);
+    renderLandAndFluid();
+  }
+
+
+  let isRunning = false;
+
+  // 시뮬레이션 시작/중단 하기.
+  function startAndStopSimulation() {
+    if (!isRunning) {
+      isRunning = true;
+      player.textContent = '정지'
+      player.style.backgroundColor = '#CA5555';
+      loopSimulation();
+    } else {
+      isRunning = false;
+      player.textContent = '시작'
+      player.style.backgroundColor = '#5CC085';
+    }
+  }
+
+  // 시뮬레이션 반복이벤트
+  function loopSimulation() {
+
+    if (!isRunning) return;
+
+    // 시뮬레이션 배속 가져오기.
+    const multiplier = parseInt(document.getElementById("multiplier").value);
+
+    for(let i = 0; i < multiplier; i++) {
+      simulateFlow();
+    }
+
+    renderLandAndFluid();
+
+    requestAnimationFrame(loopSimulation);
+
+  }
+
+  // 캔버스 위에 마우스가 움직이면, 브러시 띄우기.
+  canvas.addEventListener('mousemove', (e) => {
+
+    const brushSize = Math.trunc(parseInt(document.getElementById("size").value) / 2);
+    const brushAmount = parseInt(document.getElementById("amount").value);
+
+    // 브러시 위치 이동
+    brush.style.left = `${e.clientX - brushSize}px`;
+    brush.style.top = `${e.clientY - brushSize}px`;
+
+    // 브러시 크기
+    brush.style.width = `${brushSize * 2}px`;
+    brush.style.height = `${brushSize * 2}px`;
+
+    // 브러시 색상
+    brush.style.backgroundColor = `rgba(0, 0, 220, ${brushAmount / 100})`;
+  });
+
+  // 캔버스위에서 마우스가 클릭되면, 유체 투하.
+  canvas.addEventListener('click', (e) => {
+
+    const rect = canvas.getBoundingClientRect();
+
+    const xPos = e.clientY - rect.top;
+    const yPos = e.clientX - rect.left;
+
+    const brushSize = Math.trunc(parseInt(document.getElementById("size").value) / 2);
+    const brushAmount = parseInt(document.getElementById("amount").value);
+
+    dropFluid(xPos, yPos, brushSize, brushAmount);
+    renderLandAndFluid();
+  });
+
+  // 캔버스에 마우스가 들어오면, 브러시 표시하기.
+  canvas.addEventListener('mouseenter', () => {
+    brush.style.display = 'block';
+  });
+
+  // 캔버스에서 마우스가 나가면, 브러시 삭제하기.
+  canvas.addEventListener('mouseleave', () => {
+    brush.style.display = 'none';
+  });
+
+
+</script>
+
+</html>
